@@ -3,11 +3,12 @@ import os
 from typing import Dict, List
 
 import eyed3  # type: ignore
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, UploadFile, File, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi_utils.tasks import repeat_every
 from motor.motor_asyncio import AsyncIOMotorClient  # MongoDB client
 from bson import ObjectId
+import shutil
 
 # Import models and helper functions
 from app.models import (
@@ -94,6 +95,70 @@ async def stream_song(song_id: str) -> StreamingResponse:
             yield from file_like
 
     return StreamingResponse(iterfile(), media_type="audio/mp3")
+@app.middleware("http")
+async def limit_upload_size(request: Request, call_next):
+    max_upload_size = 10 * 1024 * 1024  # 10 MB limit
+    if request.headers.get("content-length"):
+        content_length = int(request.headers.get("content-length"))
+        if content_length > max_upload_size:
+            raise HTTPException(status_code=413, detail="Upload size exceeds the limit")
+    return await call_next(request)
+
+@app.post("/songs/upload")
+async def upload_song(file: UploadFile = File(...)):
+    # Define the path where the file will be saved
+    songs_dir = "../songs"
+    file_location = os.path.join(songs_dir, file.filename)
+    
+    # Create the directory if it doesn't exist
+    os.makedirs(songs_dir, exist_ok=True)
+
+    with open(file_location, "wb") as buffer:
+        buffer.write(await file.read())
+
+    return {"info": f"file '{file.filename}' saved at '{file_location}'"}
+
+# @app.post("/songs/upload", response_model=SongRead)
+# async def upload_song(file: UploadFile = File(...)) -> SongRead:
+#     # Save the uploaded file to the music folder
+#     file_location = os.path.join(music_folder_url, file.filename)
+#     with open(file_location, "wb") as buffer:
+#         shutil.copyfileobj(file.file, buffer)
+
+#     # Load the song metadata using eyed3
+#     audiofile = eyed3.load(file_location)
+#     if not audiofile or not audiofile.tag:
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is not a valid MP3 file")
+
+#     song_title = audiofile.tag.title
+#     song_artist = audiofile.tag.artist
+
+#     # Check if the song already exists in the database
+#     existing_song = await songs_collection.find_one({"title": song_title, "artist": song_artist})
+#     if existing_song:
+#         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Song already exists")
+
+#     # Process artwork (optional)
+#     artwork_exists = False
+#     artwork_path = str(os.path.join(cover_folder_url, song_title)) + ".jpg"
+#     for image in audiofile.tag.images:
+#         with open(artwork_path, "wb") as image_file:
+#             image_file.write(image.image_data)
+#         artwork_exists = True
+
+#     # Prepare the song data
+#     new_song_data = {
+#         "url": file_location,
+#         "title": song_title,
+#         "artist": song_artist,
+#         "artwork": artwork_path if artwork_exists else None,
+#         "last_modify": get_last_modify(file_location),
+#         "duration": audiofile.info.time_secs,
+#     }
+
+#     # Save the song data to the database
+#     new_song = await create_song(new_song_data)
+#     return SongRead(**new_song)
 
 @app.post("/songs/{song_id}/like", response_model=Dict)
 async def like(song_id: str) -> dict:
